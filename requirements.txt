@@ -1,0 +1,6 @@
+# Bridge runtime deps (pinned). stdlib: imaplib, smtplib, email, logging.
+tnefparse==1.4.0       # winmail.dat / application/ms-tnef decoding
+python-dotenv==1.0.1   # load .env in dev; systemd uses EnvironmentFile
+
+# Dev / test
+pytest==8.3.4

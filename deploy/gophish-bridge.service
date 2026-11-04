@@ -1,0 +1,46 @@
+# /etc/systemd/system/gophish-bridge.service
+# Hardened unit for the reporting bridge (TASK-15).
+# After editing: sudo systemctl daemon-reload && sudo systemctl restart gophish-bridge
+#
+# Prereqs:
+#   sudo useradd --system --home /opt/gophish-bridge --shell /usr/sbin/nologin gophish-bridge
+#   venv at /opt/gophish-bridge/.venv with requirements.txt installed
+#   /opt/gophish-bridge/.env  (chmod 600, owned by gophish-bridge)
+
+[Unit]
+Description=LCS phishing reporting bridge (IMAP -> RID -> re-inject)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gophish-bridge
+Group=gophish-bridge
+WorkingDirectory=/opt/gophish-bridge
+EnvironmentFile=/opt/gophish-bridge/.env
+ExecStart=/opt/gophish-bridge/.venv/bin/python /opt/gophish-bridge/bridge.py
+
+# Self-healing backstop (TASK-03)
+Restart=always
+RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+StandardOutput=journal
+StandardError=journal
+
+# Sandboxing (TASK-15)
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/opt/gophish-bridge
+
+[Install]
+WantedBy=multi-user.target

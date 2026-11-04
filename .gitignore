@@ -1,0 +1,26 @@
+# Secrets — NEVER commit real credentials
+.env
+*.env
+!.env.example
+_local/
+secrets/
+
+# Captured baseline from the host may contain secrets until scrubbed
+src/bridge.prod.py
+deploy/*.prod.service
+
+# Logs
+*.log
+bridge.log*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store

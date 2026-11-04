@@ -1,0 +1,339 @@
+#!/usr/bin/env python3
+"""
+LCS phishing reporting bridge — REFERENCE implementation.
+
+Polls the ingestion mailbox for Defender "Report Phish" forwards, unwraps the
+(often nested / TNEF-wrapped) report, recovers the Anglerphish campaign RID, and
+re-injects a clean copy over SMTP so the "Reported" event is logged against the
+correct target.
+
+    poll (UNSEEN) -> unwrap MIME -> extract RID -> SMTP re-inject -> mark/move
+
+STATUS — READ THIS
+------------------
+This is a *reconstruction* from the project handoff, with the reliability fixes
+from RECOMMENDATIONS.md applied. It is NOT the production script. Per TASK-01,
+commit the real /opt/gophish-bridge/bridge.py first, then diff before adopting.
+
+Fixes applied here and their backlog IDs:
+  TASK-03 self-healing IMAP reconnect with exponential backoff
+  TASK-05 loop-prevention marker header + skip on re-ingest
+  TASK-06 mark \\Seen / move ONLY after confirmed re-injection; Message-ID dedupe
+  TASK-11 rotating log file + stdout + periodic heartbeat
+  TASK-10 fail-fast config validation
+  TASK-12 RID extraction anchored to landing hosts, QP/base64 decoded, dedup
+  TASK-13 X-Original-Reporter preserved after the From rewrite
+"""
+
+from __future__ import annotations
+
+import email
+import imaplib
+import logging
+import os
+import re
+import smtplib
+import sys
+import time
+from email.message import EmailMessage, Message
+from email.parser import BytesParser
+from logging.handlers import RotatingFileHandler
+from typing import Iterable, Optional, Set
+
+try:
+    from tnefparse import TNEF  # winmail.dat / application/ms-tnef
+except Exception:  # pragma: no cover
+    TNEF = None
+
+
+# --- config (TASK-10: fail fast) --------------------------------------------
+def _require(name: str) -> str:
+    val = os.getenv(name)
+    if not val:
+        logging.critical("Missing required environment variable: %s", name)
+        sys.exit(2)
+    return val
+
+
+def _load_dotenv_if_present() -> None:
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except Exception:
+        pass  # systemd uses EnvironmentFile; dotenv is dev-only
+
+
+_load_dotenv_if_present()
+
+IMAP_SERVER = _require("IMAP_SERVER")
+IMAP_USER = _require("IMAP_USER")
+IMAP_PASS = _require("IMAP_PASS")
+IMAP_MAILBOX = os.getenv("IMAP_MAILBOX", "INBOX")
+
+SMTP_SERVER = _require("SMTP_SERVER")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = _require("SMTP_USER")
+SMTP_PASS = _require("SMTP_PASS")
+
+GOPHISH_REPORT_TO = _require("GOPHISH_REPORT_TO")
+
+POLL_INTERVAL = int(os.getenv("POLL_INTERVAL_SECONDS", "30"))
+PROCESSED_FOLDER = os.getenv("PROCESSED_FOLDER", "Processed")
+LOOP_MARKER = os.getenv("LOOP_MARKER_HEADER", "X-LCS-Bridge-Processed")
+LANDING_DOMAINS = [d.strip() for d in
+                   os.getenv("LANDING_DOMAINS", "phish.lcstn.org").split(",") if d.strip()]
+LOG_FILE = os.getenv("LOG_FILE", "/opt/gophish-bridge/bridge.log")
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+
+# RID anchored to a real landing host (TASK-12) so Defender wrapper text can't
+# yield a false positive; fallback to a bare rid= only if nothing anchored hits.
+_host_alt = "|".join(re.escape(d) for d in LANDING_DOMAINS)
+_RID_ANCHORED = re.compile(r"(?:%s)[^\s\"'<>]*[?&]rid=([A-Za-z0-9]+)" % _host_alt, re.I)
+_RID_FALLBACK = re.compile(r"[?&]rid=([A-Za-z0-9]{5,})")
+
+
+# --- logging (TASK-11) ------------------------------------------------------
+def setup_logging() -> None:
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    try:
+        os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+        handlers.append(RotatingFileHandler(LOG_FILE, maxBytes=5_000_000, backupCount=5))
+    except OSError as exc:
+        print(f"WARNING: cannot write log file {LOG_FILE}: {exc}", file=sys.stderr)
+    logging.basicConfig(
+        level=getattr(logging, LOG_LEVEL, logging.INFO),
+        format="%(asctime)s %(levelname)s %(message)s",
+        handlers=handlers,
+    )
+
+
+# --- MIME unwrapping --------------------------------------------------------
+def iter_texts(msg: Message) -> Iterable[str]:
+    """Yield decoded text from a message, recursing into nested/attached emails
+    and decoding TNEF, so the RID can be searched for."""
+    for part in msg.walk():
+        ctype = part.get_content_type()
+        fname = (part.get_filename() or "").lower()
+
+        if ctype == "message/rfc822":
+            payload = part.get_payload()
+            if isinstance(payload, list):
+                for sub in payload:
+                    yield from iter_texts(sub)
+            else:
+                # Encoded (e.g. base64) rfc822 attachment: decode and parse.
+                raw = part.get_payload(decode=True)
+                if raw:
+                    yield from iter_texts(BytesParser().parsebytes(raw))
+                elif isinstance(payload, str):
+                    yield from iter_texts(email.message_from_string(payload))
+            continue
+
+        if fname.endswith(".eml"):
+            raw = part.get_payload(decode=True)
+            if raw:
+                yield from iter_texts(BytesParser().parsebytes(raw))
+            continue
+
+        if ctype == "application/ms-tnef" or fname == "winmail.dat":
+            raw = part.get_payload(decode=True)
+            if raw and TNEF is not None:
+                try:
+                    tnef = TNEF(raw)
+                    for body in (tnef.htmlbody, tnef.rtfbody, tnef.body):
+                        if body:
+                            yield body if isinstance(body, str) else body.decode("utf-8", "replace")
+                    for att in getattr(tnef, "attachments", []):
+                        data = getattr(att, "data", b"") or b""
+                        name = (getattr(att, "name", "") or "").lower()
+                        if name.endswith(".eml"):
+                            yield from iter_texts(BytesParser().parsebytes(data))
+                        else:
+                            yield data.decode("utf-8", "replace")
+                except Exception as exc:
+                    logging.warning("TNEF decode failed: %s", exc)
+            elif raw and TNEF is None:
+                logging.warning("winmail.dat seen but tnefparse not installed")
+            continue
+
+        if ctype in ("text/plain", "text/html"):
+            raw = part.get_payload(decode=True)  # decodes QP/base64 (TASK-12)
+            if raw:
+                charset = part.get_content_charset() or "utf-8"
+                yield raw.decode(charset, "replace")
+
+
+_B64_BLOB = re.compile(r"[A-Za-z0-9+/\s]{40,}={0,2}")
+
+
+def _maybe_base64_decode(text: str) -> Iterable[str]:
+    """Defender sometimes nests the original as a base64 blob whose own body is
+    never MIME-decoded. Yield decoded views of long base64 runs so the RID
+    inside them is searchable. Best-effort; failures are ignored."""
+    import base64
+    for m in _B64_BLOB.finditer(text):
+        chunk = "".join(m.group(0).split())
+        if len(chunk) < 40:
+            continue
+        try:
+            decoded = base64.b64decode(chunk, validate=False)
+        except Exception:
+            continue
+        if b"rid=" in decoded or b"http" in decoded:
+            yield decoded.decode("utf-8", "replace")
+
+
+def extract_rid(msg: Message) -> Optional[str]:
+    anchored: Set[str] = set()
+    fallback: Set[str] = set()
+    for text in iter_texts(msg):
+        views = [text]
+        views.extend(_maybe_base64_decode(text))  # TASK-12: recover nested blobs
+        for view in views:
+            anchored.update(_RID_ANCHORED.findall(view))
+            fallback.update(_RID_FALLBACK.findall(view))
+    hits = anchored or fallback
+    if not hits:
+        return None
+    if len(hits) > 1:
+        logging.warning("Multiple RID candidates %s (using first sorted)", sorted(hits))
+    return sorted(hits)[0]
+
+
+# --- re-injection (TASK-13) -------------------------------------------------
+def reinject(source: Message, rid: str, reporter: str) -> None:
+    out = EmailMessage()
+    out["From"] = SMTP_USER                 # rewrite: fixes 554 Unauthorized sender
+    out["To"] = GOPHISH_REPORT_TO
+    out["Subject"] = source.get("Subject", "Reported Phish")
+    out["X-Original-Reporter"] = reporter   # keep attribution after the rewrite
+    out["X-GoPhish-RID"] = rid
+    out[LOOP_MARKER] = "1"                  # TASK-05: loop-prevention marker
+    out.set_content(f"Reported by {reporter}\nRID {rid}\n(original attached)\n")
+    out.add_attachment(source.as_bytes(), maintype="message",
+                       subtype="rfc822", filename="reported.eml")
+
+    logging.info("Sending email to reporting mailbox")
+    with smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=30) as smtp:
+        smtp.ehlo()
+        smtp.starttls()
+        smtp.login(SMTP_USER, SMTP_PASS)
+        smtp.send_message(out)
+    logging.info("Email successfully re-injected")
+
+
+# --- one poll cycle ---------------------------------------------------------
+_processed_ids: Set[str] = set()  # Message-ID dedupe across the run (TASK-06)
+
+
+def process_emails(imap: imaplib.IMAP4) -> None:
+    imap.select(IMAP_MAILBOX)
+    status, data = imap.search(None, "UNSEEN")
+    if status != "OK":
+        logging.warning("IMAP search failed: %s", status)
+        return
+
+    ids = data[0].split()
+    if not ids:
+        logging.debug("Poll cycle OK — no unread messages")  # heartbeat at DEBUG
+        return
+    logging.info("Found %d unread messages", len(ids))
+
+    for msg_id in ids:
+        try:
+            status, md = imap.fetch(msg_id, "(RFC822)")
+            if status != "OK" or not md or not md[0]:
+                logging.warning("Fetch failed for %s", msg_id)
+                continue
+            msg = email.message_from_bytes(md[0][1])
+
+            # TASK-05: never reprocess our own re-injected mail
+            if msg.get(LOOP_MARKER):
+                logging.info("Skipping message carrying %s (loop guard)", LOOP_MARKER)
+                imap.store(msg_id, "+FLAGS", "\\Seen")
+                continue
+
+            mid = (msg.get("Message-ID") or "").strip()
+            if mid and mid in _processed_ids:
+                logging.info("Already processed Message-ID %s — skipping", mid)
+                imap.store(msg_id, "+FLAGS", "\\Seen")
+                continue
+
+            reporter = msg.get("From", "unknown")
+            rid = extract_rid(msg)
+            if not rid:
+                logging.warning("No RID found | user=%s — leaving UNSEEN for review", reporter)
+                continue
+
+            logging.info("REPORT_EVENT | user=%s | rid=%s", reporter, rid)
+            reinject(msg, rid, reporter)      # may raise — handled below
+
+            # TASK-06: only NOW is it safe to mark seen / move.
+            if mid:
+                _processed_ids.add(mid)
+            imap.store(msg_id, "+FLAGS", "\\Seen")
+            try:
+                imap.copy(msg_id, PROCESSED_FOLDER)
+                imap.store(msg_id, "+FLAGS", "\\Deleted")
+            except Exception as exc:
+                logging.warning("Could not move to %s: %s", PROCESSED_FOLDER, exc)
+            logging.info("Message processed successfully")
+
+        except Exception as exc:
+            # TASK-03/06: one bad message must not kill the loop or get lost.
+            logging.exception("Error on message %s (left UNSEEN): %s", msg_id, exc)
+
+    try:
+        imap.expunge()
+    except Exception:
+        pass
+
+
+# --- main loop with self-healing reconnect (TASK-03) ------------------------
+def connect_imap() -> imaplib.IMAP4_SSL:
+    logging.info("Connecting to IMAP mailbox %s", IMAP_SERVER)
+    imap = imaplib.IMAP4_SSL(IMAP_SERVER, timeout=30)
+    imap.login(IMAP_USER, IMAP_PASS)
+    return imap
+
+
+def main() -> None:
+    setup_logging()
+    logging.info("Reporting bridge starting (poll=%ss, mailbox=%s, landing=%s)",
+                 POLL_INTERVAL, IMAP_MAILBOX, ",".join(LANDING_DOMAINS))
+
+    imap: Optional[imaplib.IMAP4_SSL] = None
+    backoff = POLL_INTERVAL
+    max_backoff = 300
+    cycles = 0
+
+    while True:
+        try:
+            if imap is None:
+                imap = connect_imap()
+                backoff = POLL_INTERVAL
+            process_emails(imap)
+            cycles += 1
+            if cycles % 20 == 0:            # heartbeat so a dead loop is visible
+                logging.info("Heartbeat: %d poll cycles completed", cycles)
+            time.sleep(POLL_INTERVAL)
+        except (imaplib.IMAP4.abort, imaplib.IMAP4.error, OSError) as exc:
+            logging.warning("IMAP problem: %s — reconnecting in %ss", exc, backoff)
+            try:
+                if imap is not None:
+                    imap.logout()
+            except Exception:
+                pass
+            imap = None
+            time.sleep(backoff)
+            backoff = min(backoff * 2, max_backoff)
+        except KeyboardInterrupt:
+            logging.info("Shutting down")
+            break
+        except Exception as exc:  # pragma: no cover
+            logging.exception("Unexpected error: %s", exc)
+            time.sleep(POLL_INTERVAL)
+
+
+if __name__ == "__main__":
+    main()
