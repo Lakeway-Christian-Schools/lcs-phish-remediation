@@ -11,6 +11,7 @@ Effort: S (<½ day) · M (~1 day) · L (multi-day)
 | ID | Pri | Status | Effort | Item | Acceptance criteria |
 |----|-----|--------|--------|------|---------------------|
 | TASK-01 | P0 | ☐ | S | Baseline the running bridge + unit in git | Real `/opt/gophish-bridge/bridge.py`, live `gophish-bridge.service`, and the `.env` *keys* (no values) committed on a `baseline` tag; secrets scrubbed; diff vs `src/bridge.py` recorded in a short note. |
+| TASK-02 | P1 | ☐ | S | Establish git remote + agent-access path | Private remote (GitHub/GitLab) holds this repo; `lcs-phish-01` can clone/pull it; decision recorded on how Claude Code reaches the host (Option A staging clone vs Option B SSH). See `docs/04-access-and-mcp-options.md`. |
 
 ## P1
 
@@ -44,6 +45,7 @@ Effort: S (<½ day) · M (~1 day) · L (multi-day)
 | TASK-19 | P3 | ☐ | S | Admin-surface exposure | `:3333` bound to localhost/VPN only (verified from off-host); `phish.lcstn.org` TLS auto-renews. |
 | TASK-20 | P3 | ☐ | S | Poll latency option | Decision recorded: keep 30s poll or adopt Graph subscription (depends on TASK-07). |
 | TASK-21 | P3 | ☐ | S | Cert scope / CT teardown | SAN cert (not wildcard) for lures; documented DNS+cert teardown step after each campaign window. |
+| TASK-22 | P3 | ☐ | L | (Later) read-only ops MCP server | Internal, authenticated MCP exposing *read-only* telemetry (reported counts, bridge health, last-poll); no credential access; VPN-bound; in-scope for TASK-14 governance. Only after P1 items close. See `docs/04-access-and-mcp-options.md`. |
 
 ## Governance
 
@@ -60,4 +62,7 @@ Effort: S (<½ day) · M (~1 day) · L (multi-day)
   (would have shown as "No RID found" on genuine Defender reports). Added a
   base64-recovery pass in `extract_rid` (TASK-12). Still need REAL wrapped
   samples in `tests/fixtures/` across Outlook desktop/OWA/new Outlook.
+- 2026-11-04 — Added `docs/04-access-and-mcp-options.md` (how an agent reaches
+  `lcs-phish-01`; why "own MCP online" is a separate, later, read-only idea).
+  Added TASK-02 (git remote + agent access) and TASK-22 (deferred ops MCP).
 - (add dated entries here as tasks complete)
