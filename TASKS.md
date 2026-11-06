@@ -10,15 +10,15 @@ Effort: S (<½ day) · M (~1 day) · L (multi-day)
 
 | ID | Pri | Status | Effort | Item | Acceptance criteria |
 |----|-----|--------|--------|------|---------------------|
-| TASK-01 | P0 | ☐ | S | Baseline the running bridge + unit in git | Real `/opt/gophish-bridge/bridge.py`, live `gophish-bridge.service`, and the `.env` *keys* (no values) committed on a `baseline` tag; secrets scrubbed; diff vs `src/bridge.py` recorded in a short note. |
+| TASK-01 | P0 | ☑ | S | Baseline the running bridge + unit in git | DONE 2026-11-06. Real script, unit, service props, perms listing, redacted env keys committed on tag `baseline`; no secrets found (all `os.getenv`); diff + findings in `BASELINE.md`. |
 | TASK-02 | P1 | ☐ | S | Establish git remote + agent-access path | Private remote (GitHub/GitLab) holds this repo; `lcs-phish-01` can clone/pull it; decision recorded on how Claude Code reaches the host (Option A staging clone vs Option B SSH). See `docs/04-access-and-mcp-options.md`. |
 
 ## P1
 
 | ID | Pri | Status | Effort | Item | Acceptance criteria |
 |----|-----|--------|--------|------|---------------------|
-| TASK-03 | P1 | ☐ | M | Self-healing bridge | Transient IMAP failure (`Errno 111`) recovers automatically with backoff; a single malformed message is logged and skipped, not fatal; no manual restart needed in a 24h soak. |
-| TASK-04 | P1 | ☐ | S | Rotate exposed creds + secrets inventory | Every credential ever in the old script rotated; `docs/secrets-inventory.md` lists each secret, owner, store, rotation cadence. No secret in git history (verified). |
+| TASK-03 | P2 | ☐ | M | Self-healing bridge | **Downgraded by BASELINE** (prod reconnects each cycle, so transient failures already self-heal). Remaining: add backoff; make a single malformed message non-fatal; 24h soak shows no manual restart. |
+| TASK-04 | P1 | ☐ | S | Rotate exposed creds + secrets inventory | **Bumped by BASELINE:** `.env` is mode 0644 (world-readable) — `chmod 640`, `chown root:gophish`, then rotate IMAP/SMTP creds (readable by any local user). Then `docs/secrets-inventory.md` lists each secret, owner, store, rotation cadence. No secret in git history (verified clean at baseline). |
 | TASK-05 | P1 | ☐ | M | Loop prevention + folder separation | Re-injected mail carries `X-LCS-Bridge-Processed`; bridge skips any message with it; ingest folder ≠ Anglerphish-monitored folder; documented test shows no re-ingestion loop. |
 | TASK-06 | P1 | ☐ | M | Mark-seen ordering + idempotency | Message marked seen/moved only after confirmed re-injection; processed `Message-ID`s tracked across restart; injected-SMTP-fail test leaves message re-processable, no duplicate Reported event. |
 | TASK-07 | P1 | ☐ | L | Retire IONOS → OAuth2/Graph ingestion | Entra app (app-only `Mail.Read`, access-policy-scoped to `phishreport@lcstn.org`) reads the mailbox; bridge authenticates without Basic auth; parallel-validated against current path; IONOS + forwarding exception decommissioned. See `docs/02-reporting-path-options.md` and `docs/adr/0002-*`. |
@@ -30,10 +30,10 @@ Effort: S (<½ day) · M (~1 day) · L (multi-day)
 | ID | Pri | Status | Effort | Item | Acceptance criteria |
 |----|-----|--------|--------|------|---------------------|
 | TASK-10 | P2 | ☐ | M | Config validation + fixture tests | Missing env var exits with a clear message at startup; ≥3 real wrapped-report fixtures committed; `pytest` covers each MIME branch; CI-runnable. |
-| TASK-11 | P2 | ☐ | S | Observability | RotatingFileHandler active; heartbeat line each cycle; stdout→journald; alert hook on repeated SMTP/parse errors; `REPORT_EVENT` line unchanged for SIEM. |
+| TASK-11 | P2 | ☐ | S | Observability | **Reduced by BASELINE** (file rotation already runs via external logrotate). Remaining: heartbeat line each cycle; stdout→journald; alert hook on repeated SMTP/parse errors; `REPORT_EVENT` line unchanged for SIEM. |
 | TASK-12 | P2 | ☐ | M | Robust RID extraction | QP/base64 decoded before match; match anchored to `LANDING_DOMAINS`; multiple/ambiguous RIDs logged not silently picked; explicit "no RID found" log. Covered by TASK-10 tests. |
 | TASK-13 | P2 | ☐ | S | Re-injection mail auth | SPF/DKIM/DMARC verified for the sending path; `X-Original-Reporter` preserved; end-to-end test shows re-injected mail accepted, not junked. |
-| TASK-15 | P2 | ☐ | S | Harden systemd unit | Dedicated user, sandboxing directives, `Restart=always`/`RestartSec`; DB dependency confirmed (`mariadb.service`); `systemd-analyze security` improved. |
+| TASK-15 | P2 | ☐ | S | Harden systemd unit | **Reduced by BASELINE** (prod already has `Restart=always`, `RestartSec=5`, `NoNewPrivileges`, `PrivateTmp`, runs as `gophish`). Remaining: deeper sandboxing (`ProtectSystem=strict`, `ProtectHome`, `ReadWritePaths`, `After=network-online.target`); dedicated-user decision; `systemd-analyze security` improved. |
 | TASK-16 | P2 | ☐ | M | Document DB FK divergence | `docs/db-divergence.md` records the omitted FK + root cause (signed INT types); orphan-row cleanup added; Anglerphish version pinned; `reports` DDL + goose state (`20260720000002`) captured. |
 | TASK-17 | P2 | ☐ | M | Backups + monitoring | Scheduled MariaDB dump + config/keys/certs backup; restore tested once; monitoring for service liveness + cert expiry. |
 | TASK-18 | P2 | ☐ | S | Fix training asset URLs | Training HTML uses relative/correct-host paths; all images/CSS/JS load from `training.lcstn.org`; no cross-host/mixed-content warnings. |
@@ -65,4 +65,11 @@ Effort: S (<½ day) · M (~1 day) · L (multi-day)
 - 2026-11-04 — Added `docs/04-access-and-mcp-options.md` (how an agent reaches
   `lcs-phish-01`; why "own MCP online" is a separate, later, read-only idea).
   Added TASK-02 (git remote + agent access) and TASK-22 (deferred ops MCP).
+- 2026-11-06 — TASK-01 DONE (tag `baseline`). Captured real bridge/unit/perms.
+  Findings in `BASELINE.md`: service runs as `gophish` (no `gophish-bridge`
+  user); venv is `venv` not `.venv`; unit already has restart + partial
+  hardening; logrotate already running; **`.env` is world-readable (0644) →
+  TASK-04 bumped**; re-inject loop bounded-but-fragile → keep TASK-05;
+  RID-logged vs RID-sent can disagree → folds into TASK-12. TASK-03/11/15
+  downgraded/reduced (prod already does part). No secrets in the script.
 - (add dated entries here as tasks complete)

@@ -1,0 +1,14 @@
+total 212
+drwxr-xr-x 3 gophish gophish  4096 Oct 25 00:00 .
+drwxr-xr-x 8 root    root     4096 Aug 21 11:48 ..
+-rw-r----- 1 gophish gophish  2223 Nov  6 07:56 bridge.log
+-rw-r----- 1 gophish gophish 23793 Oct 24 23:59 bridge.log.1.gz
+-rw-r----- 1 gophish gophish 24492 Oct 21 23:59 bridge.log.2.gz
+-rw-r----- 1 gophish gophish 25427 Oct  1 23:59 bridge.log.3.gz
+-rw-r----- 1 gophish gophish 23436 Sep 25 23:59 bridge.log.4.gz
+-rw-r----- 1 gophish gophish 25209 Sep 23 23:59 bridge.log.5.gz
+-rw-r----- 1 gophish gophish 25405 Sep 11 23:59 bridge.log.6.gz
+-rw-r----- 1 gophish gophish 24608 Sep  1 23:59 bridge.log.7.gz
+-rw-r--r-- 1 root    root     6205 May 19 14:40 bridge.py
+-rw-r--r-- 1 root    root      194 May 19 11:51 .env
+drwxrwxr-x 6 gophish gophish  4096 May 13 12:21 venv

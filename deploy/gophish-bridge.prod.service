@@ -1,0 +1,20 @@
+# /etc/systemd/system/gophish-bridge.service
+[Unit]
+Description=GoPhish Reporting Bridge
+After=network.target
+
+[Service]
+Type=simple
+User=gophish
+WorkingDirectory=/opt/gophish-bridge
+ExecStart=/opt/gophish-bridge/venv/bin/python /opt/gophish-bridge/bridge.py
+EnvironmentFile=/opt/gophish-bridge/.env
+Restart=always
+RestartSec=5
+
+# Environment hardening (optional but good)
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

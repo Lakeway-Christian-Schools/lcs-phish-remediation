@@ -1,0 +1,6 @@
+MainPID=968
+ExecStart={ path=/opt/gophish-bridge/venv/bin/python ; argv[]=/opt/gophish-bridge/venv/bin/python /opt/gophish-bridge/bridge.py ; ignore_errors=no ; start_time=[Fri 2026-11-06 07:47:38 EST] ; stop_time=[n/a] ; pid=968 ; code=(null) ; status=0/0 }
+WorkingDirectory=/opt/gophish-bridge
+User=gophish
+Group=
+FragmentPath=/etc/systemd/system/gophish-bridge.service
