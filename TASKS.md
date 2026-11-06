@@ -11,7 +11,7 @@ Effort: S (<½ day) · M (~1 day) · L (multi-day)
 | ID | Pri | Status | Effort | Item | Acceptance criteria |
 |----|-----|--------|--------|------|---------------------|
 | TASK-01 | P0 | ☑ | S | Baseline the running bridge + unit in git | DONE 2026-11-06. Real script, unit, service props, perms listing, redacted env keys committed on tag `baseline`; no secrets found (all `os.getenv`); diff + findings in `BASELINE.md`. |
-| TASK-02 | P1 | ☐ | S | Establish git remote + agent-access path | Private remote (GitHub/GitLab) holds this repo; `lcs-phish-01` can clone/pull it; decision recorded on how Claude Code reaches the host (Option A staging clone vs Option B SSH). See `docs/04-access-and-mcp-options.md`. |
+| TASK-02 | P1 | ◐ | S | Establish git remote + agent-access path | Remote live & private: `Lakeway-Christian-Schools/lcs-phish-remediation`, default branch `main`, full history pushed. Remaining: add `baseline`/`v0-scaffold` tags from workstation (proxy blocked tag push here), and set the server's clone auth (deploy key) in TASK-15. See `docs/05-git-and-sync.md`. |
 
 ## P1
 
@@ -72,4 +72,8 @@ Effort: S (<½ day) · M (~1 day) · L (multi-day)
   TASK-04 bumped**; re-inject loop bounded-but-fragile → keep TASK-05;
   RID-logged vs RID-sent can disagree → folds into TASK-12. TASK-03/11/15
   downgraded/reduced (prod already does part). No secrets in the script.
+- 2026-11-06 — TASK-02: private GitHub remote created and `main` pushed
+  (full history). Branch standardized `master`→`main`. Tag push blocked by the
+  build env's git proxy → tags to be added from the workstation (one command in
+  `docs/05-git-and-sync.md`). Server clone auth (deploy key) deferred to TASK-15.
 - (add dated entries here as tasks complete)
