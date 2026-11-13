@@ -18,7 +18,7 @@ Effort: S (<½ day) · M (~1 day) · L (multi-day)
 | ID | Pri | Status | Effort | Item | Acceptance criteria |
 |----|-----|--------|--------|------|---------------------|
 | TASK-03 | P2 | ☐ | M | Self-healing bridge | **Downgraded by BASELINE** (prod reconnects each cycle, so transient failures already self-heal). Remaining: add backoff; make a single malformed message non-fatal; 24h soak shows no manual restart. |
-| TASK-04 | P1 | ☐ | S | Rotate exposed creds + secrets inventory | **Bumped by BASELINE:** `.env` is mode 0644 (world-readable) — `chmod 640`, `chown root:gophish`, then rotate IMAP/SMTP creds (readable by any local user). Then `docs/secrets-inventory.md` lists each secret, owner, store, rotation cadence. No secret in git history (verified clean at baseline). |
+| TASK-04 | P1 | ◐ | S | Rotate exposed creds + secrets inventory | Runbook + tooling landed on branch `task-04-env-lockdown`: `docs/06-env-lockdown-and-rotation.md`, `scripts/lockdown-env.sh` (idempotent 640 root:gophish), `docs/secrets-inventory.md`. **Remaining (operator action on `lcs-phish-01`):** run the lockdown script, rotate the IONOS credential, smoke-test a Reported event, record the date in the inventory. |
 | TASK-05 | P1 | ☐ | M | Loop prevention + folder separation | Re-injected mail carries `X-LCS-Bridge-Processed`; bridge skips any message with it; ingest folder ≠ Anglerphish-monitored folder; documented test shows no re-ingestion loop. |
 | TASK-06 | P1 | ☐ | M | Mark-seen ordering + idempotency | Message marked seen/moved only after confirmed re-injection; processed `Message-ID`s tracked across restart; injected-SMTP-fail test leaves message re-processable, no duplicate Reported event. |
 | TASK-07 | P1 | ☐ | L | Retire IONOS → OAuth2/Graph ingestion | Entra app (app-only `Mail.Read`, access-policy-scoped to `phishreport@lcstn.org`) reads the mailbox; bridge authenticates without Basic auth; parallel-validated against current path; IONOS + forwarding exception decommissioned. See `docs/02-reporting-path-options.md` and `docs/adr/0002-*`. |
@@ -76,4 +76,9 @@ Effort: S (<½ day) · M (~1 day) · L (multi-day)
   (full history). Branch standardized `master`→`main`. Tag push blocked by the
   build env's git proxy → tags to be added from the workstation (one command in
   `docs/05-git-and-sync.md`). Server clone auth (deploy key) deferred to TASK-15.
+- 2026-11-13 — TASK-04 (branch `task-04-env-lockdown`): wrote the `.env`
+  lockdown + IONOS rotation runbook (`docs/06`), an idempotent
+  `scripts/lockdown-env.sh` (640 root:gophish, contents never read), and
+  `docs/secrets-inventory.md`. Code/doc side done; the perms fix + credential
+  rotation are operator actions on the host, checklisted in the runbook.
 - (add dated entries here as tasks complete)
